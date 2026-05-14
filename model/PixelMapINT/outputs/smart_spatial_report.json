@@ -1,0 +1,33 @@
+{
+    "report_type": "Spatial Asset Analysis",
+    "model": "SegFormer-B0 Semantic Segmentation",
+    "assumed_gsd_m_per_pixel": 0.5,
+    "total_image_area_sq_m": 4096.0,
+    "detected_assets": [
+        {
+            "asset_type": "Urban Land",
+            "estimated_area_sq_m": 130.0,
+            "coverage_percent": 3.17,
+            "status": "Built-up or developed regions detected"
+        },
+        {
+            "asset_type": "Agricultural Land",
+            "estimated_area_sq_m": 3965.25,
+            "coverage_percent": 96.81,
+            "status": "Agricultural activity zones identified"
+        },
+        {
+            "asset_type": "Open/Rangeland",
+            "estimated_area_sq_m": 0.75,
+            "coverage_percent": 0.02,
+            "status": "Open land or sparse vegetation identified"
+        }
+    ],
+    "spatial_alerts": [
+        {
+            "alert": "Green Cover Deficiency",
+            "severity": "Medium",
+            "description": "Low vegetation coverage detected. Urban plantation or park development recommended."
+        }
+    ]
+}

@@ -1,33 +1,7 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
-import ExportButton from "./ExportButton";
+import React from "react";
+import ResultDownloadButton from "./ExportButton";
 
-const TABS = [
-  { id: "detect", label: "Detect" },
-  { id: "map", label: "Map View" },
-  { id: "change", label: "Change Detection" },
-  { id: "analytics", label: "Analytics" },
-];
-
-export default function Navbar({ theme, onToggleTheme, activeTab, onTab, jobId, onToast }) {
-  const navRef = useRef(null);
-  const itemRefs = useRef([]);
-  const [underline, setUnderline] = useState({ x: 0, w: 0 });
-
-  useLayoutEffect(() => {
-    const measure = () => {
-      const wrap = navRef.current;
-      const idx = TABS.findIndex((t) => t.id === activeTab);
-      const el = itemRefs.current[idx];
-      if (!wrap || !el) return;
-      const wr = wrap.getBoundingClientRect();
-      const er = el.getBoundingClientRect();
-      setUnderline({ x: er.left - wr.left, w: er.width });
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [activeTab]);
-
+export default function Navbar({ theme, onToggleTheme, jobId, resultUrl, onToast }) {
   return (
     <header className="navbar">
       <div className="navbar__inner">
@@ -41,22 +15,7 @@ export default function Navbar({ theme, onToggleTheme, activeTab, onTab, jobId, 
           <span className="navbar__word">InfraSight</span>
         </div>
 
-        <nav className="navbar__tabs" ref={navRef} aria-label="Primary">
-          <div className="navbar__underline" style={{ transform: `translateX(${underline.x}px)`, width: `${underline.w}px` }} />
-          {TABS.map((t, i) => (
-            <button
-              key={t.id}
-              type="button"
-              className={`navbar__tab ${activeTab === t.id ? "navbar__tab--active" : ""}`}
-              ref={(el) => {
-                itemRefs.current[i] = el;
-              }}
-              onClick={() => onTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
+        <div className="navbar__tagline">PixelMapINT obstacle marking</div>
 
         <div className="navbar__actions">
           <button
@@ -79,7 +38,7 @@ export default function Navbar({ theme, onToggleTheme, activeTab, onTab, jobId, 
               </svg>
             </span>
           </button>
-          <ExportButton jobId={jobId} disabled={!jobId} onToast={onToast} />
+          <ResultDownloadButton resultUrl={resultUrl} disabled={!jobId} onToast={onToast} />
         </div>
       </div>
     </header>

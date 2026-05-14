@@ -27,10 +27,10 @@ export default function UploadPanel({ onResult, onScanning, onToast, onPreviewUr
         const fd = new FormData();
         fd.append("image", file, file.name || "upload.jpg");
         const res = await fetch("/detect", { method: "POST", body: fd });
-        if (!res.ok) throw new Error("Detection service unavailable");
+        if (!res.ok) throw new Error("Scan service unavailable");
         const data = await res.json();
         onResult(data);
-        onToast("Inference complete. Detections synchronized.", "success");
+        onToast("Marking map ready.", "success");
       } catch (e) {
         onToast(e.message || "Detection failed", "danger");
         onResult(null);
@@ -85,8 +85,8 @@ export default function UploadPanel({ onResult, onScanning, onToast, onPreviewUr
                 d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"
               />
             </svg>
-            <div className="upload-zone__title">Drop satellite or drone frame</div>
-            <div className="upload-zone__hint">PNG / JPG · auto-stub inference</div>
+            <div className="upload-zone__title">Drop aerial or satellite image</div>
+            <div className="upload-zone__hint">PNG / JPG · PixelMapINT SegFormer marking map</div>
           </div>
           {drag ? <div className="upload-zone__drop-label">DROP TO SCAN</div> : null}
         </div>
@@ -102,7 +102,7 @@ export default function UploadPanel({ onResult, onScanning, onToast, onPreviewUr
                     <div className="orbit__ring" />
                   </div>
                   <p className="upload-preview__infer-text">Running model inference…</p>
-                  <p className="upload-preview__infer-sub">Stub pipeline · 1–2s</p>
+                  <p className="upload-preview__infer-sub">GPU optional · weights in model/PixelMapINT/model/</p>
                 </div>
               ) : null}
             </div>

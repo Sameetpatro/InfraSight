@@ -168,7 +168,7 @@ export default function HeroThreeJS({ theme }) {
             <h1 className="hero-brand">InfraSight</h1>
             <p className="hero-tagline">Spatial asset intelligence for Indian Railways</p>
           </div>
-          <p className="hero-bar__hint">Satellite & drone frames · live stub inference</p>
+          <p className="hero-bar__hint">Satellite & drone frames · YOLOv8 + optional SAM</p>
           <div className="hero-bar__status">
             <span className="hero-pulse" aria-hidden="true" />
             <span>System active</span>

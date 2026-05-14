@@ -1,123 +1,34 @@
-import React, { useEffect, useRef, useState } from "react";
+import React from "react";
 
-const ICONS = {
-  Buildings: "🏢",
-  Trees: "🌳",
-  "Water Bodies": "💧",
-  Roads: "🛣",
-  Parks: "🌿",
-  Drains: "🕳",
-  "Vehicles & Parking": "🚗",
-  "Waste Dumps": "⚠️",
-  "Solar Panels": "☀️",
-};
-
-const ORDER = [
-  "Buildings",
-  "Trees",
-  "Water Bodies",
-  "Roads",
-  "Parks",
-  "Drains",
-  "Vehicles & Parking",
-  "Waste Dumps",
-  "Solar Panels",
-];
-
-function useCountUp(target, durationMs, active) {
-  const [val, setVal] = useState(0);
-  const startRef = useRef(0);
-  const fromRef = useRef(0);
-  const rafRef = useRef(0);
-
-  useEffect(() => {
-    if (!active) {
-      setVal(0);
-      return;
-    }
-    startRef.current = performance.now();
-    fromRef.current = 0;
-    const tick = (now) => {
-      const t = Math.min(1, (now - startRef.current) / durationMs);
-      const eased = 1 - Math.pow(1 - t, 3);
-      setVal(fromRef.current + (target - fromRef.current) * eased);
-      if (t < 1) rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [target, durationMs, active]);
-
-  return val;
-}
-
-function SummaryCard({ row, index, active }) {
-  const countTarget = row.count || 0;
-  const areaTarget = row.area_sqm || 0;
-  const cAnim = useCountUp(countTarget, 900, active);
-  const aAnim = useCountUp(areaTarget, 1100, active);
-  const waste = row.category === "Waste Dumps";
-  const buildings = row.category === "Buildings";
-  const solar = row.category === "Solar Panels";
-
-  return (
-    <div
-      className="summary-card"
-      style={{ "--i": index, "--accent": row.color }}
-      data-category={row.category}
-    >
-      <div className="summary-card__border" />
-      <div className="summary-card__head">
-        <div className="summary-card__icon" aria-hidden="true">
-          {ICONS[row.category]}
-        </div>
-        <div>
-          <div className="summary-card__name">{row.category}</div>
-          <div className="summary-card__stats">
-            <span className="summary-card__count">{Math.round(cAnim)}</span>
-            <span className="summary-card__muted"> detections</span>
-          </div>
-        </div>
-      </div>
-      <div className="summary-card__area">
-        <span className="summary-card__area-label">Total area</span>
-        <span className="summary-card__area-val">{Math.round(aAnim).toLocaleString()} m²</span>
-      </div>
-      {waste && countTarget > 0 ? <div className="badge badge--pulse badge--danger">⚠ ILLEGAL DUMP DETECTED</div> : null}
-      {buildings && countTarget > 1 ? <div className="badge badge--warn">🚨 ENCROACHMENT RISK</div> : null}
-      {solar && countTarget > 0 ? <div className="badge badge--eco">ECO ✓</div> : null}
-    </div>
-  );
-}
-
-export default function SummaryPanel({ summary, visible }) {
-  const rows = ORDER.map((name) => {
-    const hit = (summary && summary.categories ? summary.categories : []).find((c) => c.category === name);
-    const colors = {
-      Buildings: "#FF6B6B",
-      Trees: "#51CF66",
-      "Water Bodies": "#339AF0",
-      Roads: "#868E96",
-      Parks: "#94D82D",
-      Drains: "#F59F00",
-      "Vehicles & Parking": "#CC5DE8",
-      "Waste Dumps": "#FF922B",
-      "Solar Panels": "#22B8CF",
-    };
-    return {
-      category: name,
-      count: hit ? hit.count : 0,
-      area_sqm: hit ? hit.area_sqm : 0,
-      color: colors[name],
-    };
-  });
+export default function SummaryPanel({ markingStats, visible, modelNote }) {
+  const rows = markingStats || [];
 
   return (
     <div className={`summary-panel ${visible ? "summary-panel--on" : ""}`}>
-      <div className="summary-panel__title">Category intelligence</div>
-      <div className="summary-panel__grid">
-        {rows.map((r, i) => (
-          <SummaryCard key={r.category} row={r} index={i} active={visible} />
-        ))}
+      <div className="summary-panel__title">Marking coverage</div>
+      <p className="summary-panel__lead">
+        Yellow highlights areas the model treats as open for routing; pink is vegetation, blue is water, orange is built-up.
+        This is semantic land-cover, not instance segmentation — use it as a starting layer for your own workflows.
+      </p>
+      {modelNote ? (
+        <div className="summary-panel__model-note" role="status">
+          {modelNote}
+        </div>
+      ) : null}
+      <div className="summary-panel__legend">
+        {rows.map((row) => {
+          const rgb = row.color_rgb || [180, 180, 180];
+          const sw = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+          return (
+            <div key={row.marking} className="legend-row">
+              <span className="legend-row__sw" style={{ background: sw }} aria-hidden="true" />
+              <div className="legend-row__text">
+                <div className="legend-row__label">{row.label}</div>
+                <div className="legend-row__pct">{Number(row.coverage_percent || 0).toFixed(1)}% of image</div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

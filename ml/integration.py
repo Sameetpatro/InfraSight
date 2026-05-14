@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -44,6 +44,28 @@ _CLASS_ID_TO_MARKING: Dict[int, str] = {
     5: "clear",  # Barren
     6: "unknown",
 }
+
+_CLASS_DISPLAY_NAMES: Dict[int, str] = {
+    0: "Urban Land",
+    1: "Agricultural Land",
+    2: "Open/Rangeland",
+    3: "Forest & Green Cover",
+    4: "Water Bodies",
+    5: "Barren Land",
+    6: "Unknown",
+}
+
+_ASSET_STATUS: Dict[str, str] = {
+    "Urban Land": "Built-up or developed regions detected",
+    "Agricultural Land": "Agricultural activity zones identified",
+    "Open/Rangeland": "Open land or sparse vegetation identified",
+    "Forest & Green Cover": "Green cover and vegetation detected",
+    "Water Bodies": "Water resource regions identified",
+    "Barren Land": "Low vegetation or unused land identified",
+    "Unknown": "Unclassified terrain detected",
+}
+
+_GSD_METERS = 0.5
 
 _MARKING_META: Dict[str, Dict[str, Any]] = {
     "clear": {
@@ -213,6 +235,145 @@ def _marking_mask_from_class(pred: np.ndarray) -> np.ndarray:
     return mapped.reshape(h, w)
 
 
+def _build_class_coverage_map(report: Dict[str, Any]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for row in report.get("detected_assets", []):
+        name = row.get("asset_type")
+        if name is not None:
+            out[str(name)] = float(row.get("coverage_percent") or 0.0)
+    return out
+
+
+def build_spatial_asset_report(pred_mask: np.ndarray) -> Dict[str, Any]:
+    """Per-pixel land-cover rollups aligned with PixelMapINT `inference.py` spatial report."""
+    pixel_area_sq_m = _GSD_METERS * _GSD_METERS
+    total_pixels = int(pred_mask.size)
+    flat = pred_mask.reshape(-1)
+    results: List[Dict[str, Any]] = []
+    for cid in range(_NUM_LABELS):
+        name = _CLASS_DISPLAY_NAMES[cid]
+        count = int((flat == cid).sum())
+        coverage_percent = (100.0 * count / float(total_pixels)) if total_pixels else 0.0
+        estimated_area = float(count) * pixel_area_sq_m
+        results.append(
+            {
+                "asset_type": name,
+                "estimated_area_sq_m": round(estimated_area, 2),
+                "coverage_percent": round(coverage_percent, 2),
+                "status": _ASSET_STATUS.get(name, ""),
+            }
+        )
+    return {
+        "report_type": "Spatial Asset Analysis",
+        "model": "SegFormer-B0",
+        "assumed_gsd_m_per_pixel": _GSD_METERS,
+        "total_image_area_sq_m": round(float(total_pixels * pixel_area_sq_m), 2),
+        "detected_assets": results,
+    }
+
+
+def attach_spatial_alerts(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Rule-based governance-style alerts (same rules as `model/PixelMapINT/deployment/inference.py`)."""
+    alerts: List[Dict[str, Any]] = []
+    coverage_map: Dict[str, float] = {}
+    for asset in report.get("detected_assets", []):
+        coverage_map[str(asset["asset_type"])] = float(asset.get("coverage_percent") or 0.0)
+
+    urban = coverage_map.get("Urban Land", 0.0)
+    green = coverage_map.get("Forest & Green Cover", 0.0)
+    water = coverage_map.get("Water Bodies", 0.0)
+    open_land = coverage_map.get("Open/Rangeland", 0.0)
+
+    if urban > 45 and green < 15:
+        alerts.append(
+            {
+                "alert": "Urban Heat Island Risk",
+                "severity": "High",
+                "description": "Dense urban coverage with insufficient green cover detected.",
+            }
+        )
+
+    if green < 10:
+        alerts.append(
+            {
+                "alert": "Green Cover Deficiency",
+                "severity": "Medium",
+                "description": "Low vegetation coverage detected.",
+            }
+        )
+
+    if water > 20 and urban > 25:
+        alerts.append(
+            {
+                "alert": "Potential Flood Vulnerability",
+                "severity": "Medium",
+                "description": "Large water-body presence near urban regions detected.",
+            }
+        )
+
+    if open_land > 30 and green < 15:
+        alerts.append(
+            {
+                "alert": "Urban Planning Opportunity",
+                "severity": "Low",
+                "description": "Open land suitable for green-zone development detected.",
+            }
+        )
+
+    report["spatial_alerts"] = alerts
+    return report
+
+
+def _count_components_for_class(pred: np.ndarray, class_id: int) -> int:
+    import cv2
+
+    m = (pred == class_id).astype(np.uint8)
+    if m.sum() == 0:
+        return 0
+    n, _, _, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    return max(0, int(n) - 1)
+
+
+def build_spatial_intelligence(pred_class: np.ndarray) -> Dict[str, Any]:
+    report = build_spatial_asset_report(pred_class)
+    attach_spatial_alerts(report)
+    clusters = {
+        "urban_patches": _count_components_for_class(pred_class, 0),
+        "forest_patches": _count_components_for_class(pred_class, 3),
+    }
+    return {"report": report, "region_clusters": clusters}
+
+
+def compare_class_coverage(
+    prev: Optional[Dict[str, float]],
+    new: Optional[Dict[str, float]],
+) -> Optional[Dict[str, Any]]:
+    """Compare land-cover percentages between two scans (same `location_hash`)."""
+    if not prev or not new:
+        return None
+    names = [_CLASS_DISPLAY_NAMES[i] for i in range(_NUM_LABELS)]
+    change_report: Dict[str, Any] = {}
+    for name in names:
+        old_v = float(prev.get(name, 0.0) or 0.0)
+        new_v = float(new.get(name, 0.0) or 0.0)
+        change_report[name] = {
+            "before_percent": round(old_v, 2),
+            "after_percent": round(new_v, 2),
+            "change_percent": round(new_v - old_v, 2),
+        }
+    change_alerts: List[str] = []
+    fc = change_report["Forest & Green Cover"]["change_percent"]
+    uc = change_report["Urban Land"]["change_percent"]
+    if fc < -10:
+        change_alerts.append("Significant green cover reduction detected.")
+    if uc > 10:
+        change_alerts.append("Rapid urban expansion / possible encroachment detected.")
+    return {
+        "change_report": change_report,
+        "change_alerts": change_alerts,
+    }
+
+
 def _stats_for_marking_mask(marking_ids: np.ndarray, total_pixels: int) -> List[Dict[str, Any]]:
     keys = ["clear", "vegetation", "water", "built", "unknown"]
     out: List[Dict[str, Any]] = []
@@ -247,10 +408,11 @@ def _colorize_marking(marking_ids: np.ndarray) -> np.ndarray:
 
 def build_marking_overlay(
     bgr: np.ndarray, alpha: float = 0.48
-) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]], Dict[str, Any]]:
+) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]], Dict[str, Any], np.ndarray]:
     """
-    Returns (overlay_bgr, marking_ids_fullres, marking_stats, tiling_info).
+    Returns (overlay_bgr, marking_ids_fullres, marking_stats, tiling_info, class_mask_uint8).
     marking_ids_fullres uses 0..4 for clear, vegetation, water, built, unknown.
+    class_mask_uint8 holds SegFormer class ids 0..6 at full image resolution.
     """
     import cv2
 
@@ -267,7 +429,7 @@ def build_marking_overlay(
     color_full = _colorize_marking(marking_full)
     blend = np.clip((1.0 - alpha) * bgr.astype(np.float32) + alpha * color_full.astype(np.float32), 0, 255).astype(np.uint8)
     stats = _stats_for_marking_mask(marking_full, h * w)
-    return blend, marking_full, stats, tiling
+    return blend, marking_full, stats, tiling, pred_full_class
 
 
 def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
@@ -278,7 +440,7 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
 
     h, w = bgr.shape[:2]
     try:
-        overlay_bgr, _marking_ids, stats, tiling = build_marking_overlay(bgr)
+        overlay_bgr, _marking_ids, stats, tiling, pred_class = build_marking_overlay(bgr)
     except FileNotFoundError as e:
         return {
             "image_width": w,
@@ -287,6 +449,8 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
             "inference_note": str(e),
             "marking_stats": [],
             "result_relative_url": None,
+            "spatial_intelligence": None,
+            "class_coverage_percent": None,
         }
     except Exception as e:  # pragma: no cover
         return {
@@ -296,11 +460,16 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
             "inference_note": f"Inference failed: {e}",
             "marking_stats": [],
             "result_relative_url": None,
+            "spatial_intelligence": None,
+            "class_coverage_percent": None,
         }
 
     ok, buf = cv2.imencode(".png", overlay_bgr)
     if not ok:
         raise RuntimeError("Could not encode marking PNG.")
+
+    spatial = build_spatial_intelligence(pred_class)
+    class_cov = _build_class_coverage_map(spatial["report"])
 
     return {
         "image_width": w,
@@ -310,4 +479,6 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
         "marking_stats": stats,
         "marking_png_bytes": buf.tobytes(),
         "tiling": tiling,
+        "spatial_intelligence": spatial,
+        "class_coverage_percent": class_cov,
     }

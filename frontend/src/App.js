@@ -48,11 +48,6 @@ export default function App() {
       setJobId(data.job_id || "");
       setSummary(null);
       if (data.job_id) {
-        const buildLocal = () => ({
-          job_id: data.job_id,
-          processed_at: data.processed_at,
-          marking_stats: data.marking_stats || [],
-        });
         try {
           const locKey = data.location_hash || data.job_id;
           const res = await fetch(`/summary/${encodeURIComponent(locKey)}`);
@@ -61,11 +56,23 @@ export default function App() {
             setSummary(s);
           } else {
             pushToast("Summary endpoint returned an error — using latest scan stats only.", "warning");
-            setSummary(buildLocal());
+            setSummary({
+              job_id: data.job_id,
+              processed_at: data.processed_at,
+              marking_stats: data.marking_stats || [],
+              spatial_intelligence: data.spatial_intelligence,
+              change_detection: data.change_detection,
+            });
           }
         } catch {
           pushToast("Summary service unreachable — showing latest scan stats only.", "warning");
-          setSummary(buildLocal());
+          setSummary({
+            job_id: data.job_id,
+            processed_at: data.processed_at,
+            marking_stats: data.marking_stats || [],
+            spatial_intelligence: data.spatial_intelligence,
+            change_detection: data.change_detection,
+          });
         }
       }
     },
@@ -84,6 +91,18 @@ export default function App() {
     if (payload && payload.marking_stats) return payload.marking_stats;
     return [];
   }, [summary, payload]);
+
+  const spatialIntelligence = useMemo(() => {
+    if (payload && payload.spatial_intelligence) return payload.spatial_intelligence;
+    if (summary && summary.spatial_intelligence) return summary.spatial_intelligence;
+    return null;
+  }, [payload, summary]);
+
+  const changeDetection = useMemo(() => {
+    if (payload && Object.prototype.hasOwnProperty.call(payload, "change_detection")) return payload.change_detection;
+    if (summary && Object.prototype.hasOwnProperty.call(summary, "change_detection")) return summary.change_detection;
+    return null;
+  }, [payload, summary]);
 
   return (
     <div className={`app-root ${ready ? "app-root--ready" : ""}`}>
@@ -109,6 +128,8 @@ export default function App() {
                 markingStats={markingStats}
                 visible={!!payload && !scanning}
                 modelNote={payload && payload.model_note}
+                spatialIntelligence={spatialIntelligence}
+                changeDetection={changeDetection}
               />
             </div>
           </section>

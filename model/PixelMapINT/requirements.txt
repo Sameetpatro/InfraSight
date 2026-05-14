@@ -6,3 +6,6 @@ pillow
 matplotlib
 accelerate
 safetensors
+tqdm
+opencv-python
+scikit-learn

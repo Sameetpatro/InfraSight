@@ -1,0 +1,41 @@
+:root {
+  --bg: #0a0e1a;
+  --surface: #111827;
+  --card: #1a2235;
+  --border: #1e2d45;
+  --accent: #00d4ff;
+  --accent2: #7c3aed;
+  --text: #f0f4ff;
+  --muted: #6b7fa3;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+html[data-theme="light"] {
+  --bg: #f0f4ff;
+  --surface: #ffffff;
+  --card: #f8faff;
+  --border: #d1dcf0;
+  --accent: #0066cc;
+  --accent2: #6d28d9;
+  --text: #0d1b2a;
+  --muted: #4a5568;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+}
+
+html,
+body,
+.app-root {
+  transition: background 0.4s ease, color 0.3s ease;
+}
+
+* {
+  color-scheme: dark;
+}
+
+html[data-theme="light"] * {
+  color-scheme: light;
+}

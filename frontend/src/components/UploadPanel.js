@@ -86,7 +86,7 @@ export default function UploadPanel({ onResult, onScanning, onToast, onPreviewUr
               />
             </svg>
             <div className="upload-zone__title">Drop aerial or satellite image</div>
-            <div className="upload-zone__hint">PNG / JPG · PixelMapINT SegFormer marking map</div>
+            <div className="upload-zone__hint">PNG / JPG · PixelMapINT fusion (SegFormer + optional road / water / building + waste)</div>
           </div>
           {drag ? <div className="upload-zone__drop-label">DROP TO SCAN</div> : null}
         </div>

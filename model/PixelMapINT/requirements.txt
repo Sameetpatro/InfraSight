@@ -9,3 +9,6 @@ safetensors
 tqdm
 opencv-python
 scikit-learn
+PyYAML
+datasets
+evaluate

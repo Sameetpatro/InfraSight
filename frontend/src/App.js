@@ -62,6 +62,8 @@ export default function App() {
               marking_stats: data.marking_stats || [],
               spatial_intelligence: data.spatial_intelligence,
               change_detection: data.change_detection,
+              waste_detections: data.waste_detections,
+              pixelmap_pipeline: data.pixelmap_pipeline,
             });
           }
         } catch {
@@ -72,6 +74,8 @@ export default function App() {
             marking_stats: data.marking_stats || [],
             spatial_intelligence: data.spatial_intelligence,
             change_detection: data.change_detection,
+            waste_detections: data.waste_detections,
+            pixelmap_pipeline: data.pixelmap_pipeline,
           });
         }
       }
@@ -104,6 +108,12 @@ export default function App() {
     return null;
   }, [payload, summary]);
 
+  const pixelmapPipeline = useMemo(() => {
+    if (summary && summary.pixelmap_pipeline) return summary.pixelmap_pipeline;
+    if (payload && payload.pixelmap_pipeline) return payload.pixelmap_pipeline;
+    return null;
+  }, [summary, payload]);
+
   return (
     <div className={`app-root ${ready ? "app-root--ready" : ""}`}>
       <ToastStack toasts={toasts} onDismiss={removeToast} />
@@ -130,6 +140,7 @@ export default function App() {
                 modelNote={payload && payload.model_note}
                 spatialIntelligence={spatialIntelligence}
                 changeDetection={changeDetection}
+                pixelmapPipeline={pixelmapPipeline}
               />
             </div>
           </section>

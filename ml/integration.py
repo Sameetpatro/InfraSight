@@ -11,8 +11,11 @@ import numpy as np
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_WEIGHTS = _REPO_ROOT / "model" / "PixelMapINT" / "model" / "segformer_spatial_model.pth"
+_PIXELMAP_MODEL_DIR = _REPO_ROOT / "model" / "PixelMapINT" / "model"
+_DEFAULT_WASTE_YOLO = _PIXELMAP_MODEL_DIR / "best.pt"
 _HF_ID = "nvidia/segformer-b0-finetuned-ade-512-512"
 _NUM_LABELS = 7
+_BINARY_NUM_LABELS = 2
 # 2×2 = 4 tiles: each crop is run through SegFormer at model resolution, then stitched (override with ML_TILE_GRID).
 _TILE_GRID = int(os.environ.get("ML_TILE_GRID", "2"))
 
@@ -101,12 +104,34 @@ _state: Dict[str, Any] = {
     "processor": None,
     "device": None,
     "load_error": None,
+    "binary_models": {},
+    "yolo": None,
+    "yolo_error": None,
+    "yolo_import_failed": False,
 }
 
 
 def _weights_path() -> Path:
     raw = os.environ.get("ML_SEGFORMER_WEIGHTS", "").strip()
     return Path(raw) if raw else _DEFAULT_WEIGHTS
+
+
+def _binary_weights_path(kind: str) -> Path:
+    env_map = {"building": "ML_BUILDING_SEGFORMER_WEIGHTS", "road": "ML_ROAD_SEGFORMER_WEIGHTS", "water": "ML_WATER_SEGFORMER_WEIGHTS"}
+    raw = os.environ.get(env_map[kind], "").strip()
+    if raw:
+        return Path(raw)
+    files = {
+        "building": "building_segformer.pth",
+        "road": "road_segformer.pth",
+        "water": "water_segformer.pth",
+    }
+    return _PIXELMAP_MODEL_DIR / files[kind]
+
+
+def _waste_yolo_path() -> Path:
+    raw = os.environ.get("ML_WASTE_YOLO_WEIGHTS", "").strip()
+    return Path(raw) if raw else _DEFAULT_WASTE_YOLO
 
 
 def _bgr_to_rgb(bgr: Tuple[int, int, int]) -> List[int]:
@@ -121,6 +146,8 @@ def init_detector() -> None:
 
 def ml_health() -> Dict[str, Any]:
     p = _weights_path()
+    fusion = {k: _binary_weights_path(k).is_file() for k in ("building", "road", "water")}
+    yp = _waste_yolo_path()
     return {
         "pixelmap_weights": str(p),
         "weights_found": p.is_file(),
@@ -129,6 +156,10 @@ def ml_health() -> Dict[str, Any]:
         "load_error": _state.get("load_error"),
         "tile_grid": _TILE_GRID,
         "tile_regions": _TILE_GRID * _TILE_GRID,
+        "specialist_segformer_weights": fusion,
+        "waste_yolo_weights_path": str(yp),
+        "waste_yolo_weights_found": yp.is_file(),
+        "waste_yolo_error": _state.get("yolo_error"),
     }
 
 
@@ -172,25 +203,177 @@ def _ensure_model() -> None:
         _state["load_error"] = None
 
 
-def _predict_class_mask(bgr: np.ndarray) -> np.ndarray:
+def _predict_with_segformer(bgr: np.ndarray, model: Any) -> np.ndarray:
+    """Run a SegFormer model; returns 2D class ids at the processor output resolution."""
     import cv2
     import torch
 
-    _ensure_model()
-    model = _state["model"]
     processor = _state["processor"]
     device = _state["device"]
-
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     pil_inputs = processor(images=rgb, return_tensors="pt")
     pixel_values = pil_inputs["pixel_values"].to(device)
-
     with torch.no_grad():
         out = model(pixel_values=pixel_values)
         logits = out.logits
-
     pred = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
     return pred
+
+
+def _get_binary_segformer(kind: str) -> Optional[Any]:
+    """Lazy-load a 2-class SegFormer specialist, or None if weights are missing."""
+    _ensure_model()
+    device = _state["device"]
+    cache: Dict[str, Any] = _state["binary_models"]
+    with _lock:
+        if kind in cache:
+            return cache[kind]
+        path = _binary_weights_path(kind)
+        if not path.is_file():
+            cache[kind] = None
+            return None
+        import torch
+        from transformers import SegformerForSemanticSegmentation
+
+        model = SegformerForSemanticSegmentation.from_pretrained(
+            _HF_ID,
+            num_labels=_BINARY_NUM_LABELS,
+            ignore_mismatched_sizes=True,
+        )
+        state = torch.load(str(path), map_location=device)
+        model.load_state_dict(state)
+        model.to(device)
+        model.eval()
+        cache[kind] = model
+        return model
+
+
+def _binary_mask_fullres(bgr: np.ndarray, h: int, w: int, kind: str) -> Optional[np.ndarray]:
+    import cv2
+
+    model = _get_binary_segformer(kind)
+    if model is None:
+        return None
+    small = _predict_with_segformer(bgr, model)
+    mask = (small == 1).astype(np.uint8)
+    if mask.size == 0:
+        return None
+    return cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def _fuse_semantic_with_specialists(
+    semantic_hw: np.ndarray,
+    building_hw: Optional[np.ndarray],
+    water_hw: Optional[np.ndarray],
+) -> np.ndarray:
+    """Building and water specialists override semantic logits (priority before roads on marking)."""
+    fused = semantic_hw.copy()
+    if building_hw is not None:
+        fused[building_hw == 1] = 0
+    if water_hw is not None:
+        fused[water_hw == 1] = 4
+    return fused
+
+
+def _apply_road_to_marking(marking: np.ndarray, road_hw: Optional[np.ndarray]) -> np.ndarray:
+    """Roads are treated as routable (clear) and overwrite other markings, including water."""
+    if road_hw is None:
+        return marking
+    out = marking.copy()
+    out[road_hw == 1] = 0
+    return out
+
+
+def _get_yolo_waste() -> Optional[Any]:
+    path = _waste_yolo_path()
+    if not path.is_file():
+        _state["yolo_error"] = None
+        return None
+    if _state.get("yolo") is not None:
+        return _state["yolo"]
+    if _state.get("yolo_import_failed"):
+        return None
+    try:
+        from ultralytics import YOLO
+    except ImportError as e:
+        _state["yolo_import_failed"] = True
+        _state["yolo_error"] = str(e)
+        return None
+    try:
+        model = YOLO(str(path))
+    except Exception as e:  # pragma: no cover
+        _state["yolo_error"] = str(e)
+        return None
+    _state["yolo"] = model
+    _state["yolo_error"] = None
+    return model
+
+
+def _detect_waste(bgr: np.ndarray) -> List[Dict[str, Any]]:
+    model = _get_yolo_waste()
+    if model is None:
+        return []
+    try:
+        res = model.predict(bgr, verbose=False, conf=0.22, imgsz=640)
+    except Exception:
+        return []
+    if not res:
+        return []
+    r0 = res[0]
+    if r0.boxes is None or len(r0.boxes) == 0:
+        return []
+    h, w = bgr.shape[:2]
+    names = getattr(r0, "names", None) or {}
+    out: List[Dict[str, Any]] = []
+    xyxy = r0.boxes.xyxy.cpu().numpy()
+    confs = r0.boxes.conf.cpu().numpy()
+    clss = r0.boxes.cls.cpu().numpy().astype(int)
+    for i in range(len(xyxy)):
+        x1, y1, x2, y2 = xyxy[i].tolist()
+        x1, y1 = max(0.0, x1), max(0.0, y1)
+        x2, y2 = min(float(w - 1), x2), min(float(h - 1), y2)
+        cid = int(clss[i])
+        if isinstance(names, dict):
+            label = str(names.get(cid, f"class_{cid}"))
+        else:
+            label = str(cid)
+        out.append(
+            {
+                "class": label,
+                "confidence": round(float(confs[i]), 4),
+                "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            }
+        )
+    return out
+
+
+def _draw_waste_boxes(bgr: np.ndarray, detections: List[Dict[str, Any]]) -> None:
+    import cv2
+
+    for d in detections:
+        box = d.get("bbox") or []
+        if len(box) != 4:
+            continue
+        x1, y1, x2, y2 = [int(round(v)) for v in box]
+        cv2.rectangle(bgr, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        label = str(d.get("class", "waste"))
+        conf = d.get("confidence")
+        cap = f"{label}" + (f" {conf:.2f}" if conf is not None else "")
+        cv2.putText(
+            bgr,
+            cap[:48],
+            (x1, max(0, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 0, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+
+def _predict_class_mask(bgr: np.ndarray) -> np.ndarray:
+    _ensure_model()
+    return _predict_with_segformer(bgr, _state["model"])
 
 
 def _predict_class_mask_tiled(bgr: np.ndarray, grid: int) -> Tuple[np.ndarray, int]:
@@ -408,11 +591,12 @@ def _colorize_marking(marking_ids: np.ndarray) -> np.ndarray:
 
 def build_marking_overlay(
     bgr: np.ndarray, alpha: float = 0.48
-) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]], Dict[str, Any], np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]], Dict[str, Any], np.ndarray, Dict[str, Any]]:
     """
-    Returns (overlay_bgr, marking_ids_fullres, marking_stats, tiling_info, class_mask_uint8).
-    marking_ids_fullres uses 0..4 for clear, vegetation, water, built, unknown.
-    class_mask_uint8 holds SegFormer class ids 0..6 at full image resolution.
+    Returns (overlay_bgr, marking_ids_fullres, marking_stats, tiling_info, fused_class_mask_hw, aux).
+
+    fused_class_mask_hw: 7-class semantic map after building/water specialist fusion (full resolution).
+    aux keys: waste_detections (list), pipeline (which specialists ran).
     """
     import cv2
 
@@ -425,11 +609,55 @@ def build_marking_overlay(
     else:
         pred_full_class, forwards = _predict_class_mask_tiled(bgr, grid)
         tiling = {"grid": grid, "forward_passes": forwards}
-    marking_full = _marking_mask_from_class(pred_full_class)
+
+    building_hw = _binary_mask_fullres(bgr, h, w, "building")
+    water_hw = _binary_mask_fullres(bgr, h, w, "water")
+    road_hw = _binary_mask_fullres(bgr, h, w, "road")
+
+    fused_class = _fuse_semantic_with_specialists(pred_full_class, building_hw, water_hw)
+    marking_full = _marking_mask_from_class(fused_class)
+    marking_full = _apply_road_to_marking(marking_full, road_hw)
+
     color_full = _colorize_marking(marking_full)
     blend = np.clip((1.0 - alpha) * bgr.astype(np.float32) + alpha * color_full.astype(np.float32), 0, 255).astype(np.uint8)
+
+    waste_detections = _detect_waste(bgr)
+    if waste_detections:
+        _draw_waste_boxes(blend, waste_detections)
+
     stats = _stats_for_marking_mask(marking_full, h * w)
-    return blend, marking_full, stats, tiling, pred_full_class
+    pipeline: Dict[str, Any] = {
+        "semantic_segformer": True,
+        "building_specialist": building_hw is not None,
+        "water_specialist": water_hw is not None,
+        "road_specialist": road_hw is not None,
+        "waste_yolo_weights_present": _waste_yolo_path().is_file(),
+        "waste_detection_count": len(waste_detections),
+        "waste_yolo_load_error": _state.get("yolo_error"),
+    }
+
+    aux = {"waste_detections": waste_detections, "pipeline": pipeline}
+    return blend, marking_full, stats, tiling, fused_class, aux
+
+
+def _merge_waste_into_spatial(spatial: Dict[str, Any], waste_detections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not waste_detections:
+        return spatial
+    spatial = dict(spatial)
+    spatial["waste_detections"] = waste_detections
+    rep = dict(spatial["report"])
+    alerts = list(rep.get("spatial_alerts", []))
+    alerts.insert(
+        0,
+        {
+            "alert": "Solid waste / dumping (detector)",
+            "severity": "High",
+            "description": f"Vision model flagged {len(waste_detections)} candidate region(s). Treat as advisory and verify on site.",
+        },
+    )
+    rep["spatial_alerts"] = alerts
+    spatial["report"] = rep
+    return spatial
 
 
 def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
@@ -440,7 +668,7 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
 
     h, w = bgr.shape[:2]
     try:
-        overlay_bgr, _marking_ids, stats, tiling, pred_class = build_marking_overlay(bgr)
+        overlay_bgr, _marking_ids, stats, tiling, pred_class, aux = build_marking_overlay(bgr)
     except FileNotFoundError as e:
         return {
             "image_width": w,
@@ -451,6 +679,8 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
             "result_relative_url": None,
             "spatial_intelligence": None,
             "class_coverage_percent": None,
+            "pixelmap_pipeline": None,
+            "waste_detections": [],
         }
     except Exception as e:  # pragma: no cover
         return {
@@ -462,13 +692,19 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
             "result_relative_url": None,
             "spatial_intelligence": None,
             "class_coverage_percent": None,
+            "pixelmap_pipeline": None,
+            "waste_detections": [],
         }
 
     ok, buf = cv2.imencode(".png", overlay_bgr)
     if not ok:
         raise RuntimeError("Could not encode marking PNG.")
 
+    waste_detections = aux.get("waste_detections") or []
+    pipeline = aux.get("pipeline") or {}
+
     spatial = build_spatial_intelligence(pred_class)
+    spatial = _merge_waste_into_spatial(spatial, waste_detections)
     class_cov = _build_class_coverage_map(spatial["report"])
 
     return {
@@ -481,4 +717,6 @@ def run_detection(bgr: np.ndarray, filename: str) -> Dict[str, Any]:
         "tiling": tiling,
         "spatial_intelligence": spatial,
         "class_coverage_percent": class_cov,
+        "pixelmap_pipeline": pipeline,
+        "waste_detections": waste_detections,
     }

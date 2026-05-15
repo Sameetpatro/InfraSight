@@ -23,9 +23,9 @@ export default function MarkingCanvas({ sourceUrl, resultUrl, scanning }) {
             )}
           </figure>
           <figure className="marking-canvas__fig">
-            <figcaption className="marking-canvas__cap">Obstacle marking map</figcaption>
+            <figcaption className="marking-canvas__cap">Obstacle map + waste boxes</figcaption>
             {resultUrl ? (
-              <img className="marking-canvas__img" src={resultUrl} alt="Marking overlay from PixelMapINT" draggable={false} />
+              <img className="marking-canvas__img" src={resultUrl} alt="Marking overlay and optional waste detections" draggable={false} />
             ) : (
               <div className="marking-canvas__placeholder">
                 {scanning ? "Running SegFormer…" : "Marked overlay appears here after inference."}
@@ -35,7 +35,7 @@ export default function MarkingCanvas({ sourceUrl, resultUrl, scanning }) {
         </div>
         {scanning ? (
           <div className="scan-caption marking-canvas__scan">
-            Scanning… <span className="scan-caption__sub">(PixelMapINT / SegFormer)</span>
+            Scanning… <span className="scan-caption__sub">(PixelMapINT fusion)</span>
           </div>
         ) : null}
       </div>

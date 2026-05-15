@@ -3,3 +3,4 @@ transformers>=4.36.0
 numpy
 opencv-python-headless
 Pillow
+ultralytics>=8.2.0

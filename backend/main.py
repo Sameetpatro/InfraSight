@@ -7,7 +7,8 @@ Run from `backend/`:
   # or (avoids “uvicorn: command not found” and avoids watching site-packages on --reload):
   .venv/bin/python -m uvicorn main:app --reload --port 8000 --reload-exclude 'venv/*' --reload-exclude '.venv/*'
 
-Weights: `model/PixelMapINT/model/segformer_spatial_model.pth` or `ML_SEGFORMER_WEIGHTS`.
+Weights: `model/PixelMapINT/model/segformer_spatial_model.pth` (or `ML_SEGFORMER_WEIGHTS`), optional
+`building_segformer.pth` / `road_segformer.pth` / `water_segformer.pth`, and `best.pt` for waste (YOLO).
 """
 
 from __future__ import annotations
@@ -89,12 +90,32 @@ async def detect(image: UploadFile = File(...)) -> JSONResponse:
     n_pass = int(tiling.get("forward_passes", 1))
     g = int(tiling.get("grid", 1))
     tile_hint = f" Image split into {g}×{g} regions ({n_pass} model runs) for finer detail." if use_ft and n_pass > 1 else ""
-    model_note = (
-        "PixelMapINT SegFormer-B0: yellow ≈ no major obstacle, pink = vegetation, blue = water, orange = built-up."
-        + tile_hint
-        if use_ft
-        else "Weights missing or inference skipped; add segformer_spatial_model.pth or set ML_SEGFORMER_WEIGHTS."
-    )
+    pipe = infer.get("pixelmap_pipeline") or {}
+    if use_ft:
+        parts = [
+            "PixelMapINT: 7-class SegFormer plus optional building / water / road specialists (when weights are present);"
+            " yellow ≈ clear routing, pink = vegetation, blue = water, orange = built-up; red boxes = waste-model hits."
+        ]
+        if tile_hint:
+            parts.append(tile_hint.strip())
+        spec_bits = []
+        if pipe.get("building_specialist"):
+            spec_bits.append("buildings")
+        if pipe.get("water_specialist"):
+            spec_bits.append("water")
+        if pipe.get("road_specialist"):
+            spec_bits.append("roads")
+        if spec_bits:
+            parts.append("Specialist heads active: " + ", ".join(spec_bits) + ".")
+        wn = int(pipe.get("waste_detection_count") or 0)
+        if wn > 0:
+            parts.append(f"Waste detector drew {wn} advisory box(es).")
+        elif pipe.get("waste_yolo_weights_present") and pipe.get("waste_yolo_load_error"):
+            err = str(pipe.get("waste_yolo_load_error") or "")[:160]
+            parts.append(f"Waste weights present but YOLO did not load ({err}).")
+        model_note = " ".join(parts)
+    else:
+        model_note = "Weights missing or inference skipped; add segformer_spatial_model.pth or set ML_SEGFORMER_WEIGHTS."
 
     prev_cov = (prev_payload or {}).get("class_coverage_percent")
     new_cov = infer.get("class_coverage_percent")
@@ -133,12 +154,16 @@ def summary(location_hash: str) -> Dict[str, Any]:
         spatial_intelligence = lp.get("spatial_intelligence")
         change_detection = lp.get("change_detection")
         class_coverage_percent = lp.get("class_coverage_percent")
+        waste_detections = lp.get("waste_detections") or []
+        pixelmap_pipeline = lp.get("pixelmap_pipeline")
     else:
         marking_stats = latest.get("marking_stats", [])
         processed_at = latest.get("processed_at")
         spatial_intelligence = None
         change_detection = None
         class_coverage_percent = None
+        waste_detections = []
+        pixelmap_pipeline = None
     return {
         "location_hash": location_hash,
         "job_id": latest.get("job_id"),
@@ -148,4 +173,6 @@ def summary(location_hash: str) -> Dict[str, Any]:
         "spatial_intelligence": spatial_intelligence,
         "change_detection": change_detection,
         "class_coverage_percent": class_coverage_percent,
+        "waste_detections": waste_detections,
+        "pixelmap_pipeline": pixelmap_pipeline,
     }

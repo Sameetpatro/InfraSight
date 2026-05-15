@@ -6,12 +6,23 @@ function severityTone(sev) {
   return "spatial-alert--low";
 }
 
-export default function SummaryPanel({ markingStats, visible, modelNote, spatialIntelligence, changeDetection }) {
+export default function SummaryPanel({
+  markingStats,
+  visible,
+  modelNote,
+  spatialIntelligence,
+  changeDetection,
+  pixelmapPipeline,
+}) {
   const rows = markingStats || [];
   const report = spatialIntelligence && spatialIntelligence.report;
   const assets = report && Array.isArray(report.detected_assets) ? report.detected_assets : [];
   const alerts = report && Array.isArray(report.spatial_alerts) ? report.spatial_alerts : [];
   const clusters = spatialIntelligence && spatialIntelligence.region_clusters;
+  const waste =
+    spatialIntelligence && Array.isArray(spatialIntelligence.waste_detections)
+      ? spatialIntelligence.waste_detections
+      : [];
   const changeAlerts = changeDetection && Array.isArray(changeDetection.change_alerts) ? changeDetection.change_alerts : [];
   const changeReport = changeDetection && changeDetection.change_report;
 
@@ -20,7 +31,8 @@ export default function SummaryPanel({ markingStats, visible, modelNote, spatial
       <div className="summary-panel__title">Marking coverage</div>
       <p className="summary-panel__lead">
         Yellow highlights areas the model treats as open for routing; pink is vegetation, blue is water, orange is built-up.
-        This is semantic land-cover, not instance segmentation — use it as a starting layer for your own workflows.
+        Specialist heads refine buildings and water on the class map; roads are forced to “clear” for routing where the road
+        model fires. Red rectangles on the result image are advisory waste detections.
       </p>
       {modelNote ? (
         <div className="summary-panel__model-note" role="status">
@@ -28,12 +40,63 @@ export default function SummaryPanel({ markingStats, visible, modelNote, spatial
         </div>
       ) : null}
 
+      {pixelmapPipeline ? (
+        <div className="summary-panel__pipeline" role="status">
+          <span className="summary-panel__pipeline-label">Fusion pipeline</span>
+          {pixelmapPipeline.building_specialist ? <span className="pipeline-chip">Buildings</span> : null}
+          {pixelmapPipeline.water_specialist ? <span className="pipeline-chip">Water</span> : null}
+          {pixelmapPipeline.road_specialist ? <span className="pipeline-chip">Roads</span> : null}
+          {pixelmapPipeline.waste_yolo_weights_present ? (
+            <span className="pipeline-chip">
+              Waste YOLO
+              {typeof pixelmapPipeline.waste_detection_count === "number"
+                ? ` (${pixelmapPipeline.waste_detection_count})`
+                : ""}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {spatialIntelligence ? (
         <>
           <div className="summary-panel__title summary-panel__title--spaced">Spatial intelligence</div>
           <p className="summary-panel__lead summary-panel__lead--tight">
-            Land-cover rollups, governance-style rule alerts, and disconnected patch counts (same logic as PixelMapINT spatial layer).
+            Land-cover rollups, governance-style rule alerts, disconnected patch counts, and optional waste hits (same
+            spirit as the PixelMapINT spatial layer).
           </p>
+          {waste.length > 0 ? (
+            <div className="spatial-waste">
+              <div className="summary-panel__insights-title">Waste / dumping (detector)</div>
+              <p className="summary-panel__lead summary-panel__lead--tight">
+                Bounding boxes are drawn on the marking image; coordinates are in upload pixel space.
+              </p>
+              <div className="spatial-assets__scroll">
+                <table className="spatial-assets__table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Class</th>
+                      <th scope="col">Confidence</th>
+                      <th scope="col">BBox (px)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {waste.map((w, idx) => (
+                      <tr key={`${w.class}-${idx}`}>
+                        <td>{w.class}</td>
+                        <td>{w.confidence != null ? Number(w.confidence).toFixed(3) : "—"}</td>
+                        <td className="spatial-waste__bbox">
+                          {Array.isArray(w.bbox) && w.bbox.length === 4
+                            ? w.bbox.map((n) => Math.round(n)).join(", ")
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
           {clusters ? (
             <div className="spatial-clusters" role="status">
               <span className="spatial-clusters__item">Urban patches: {clusters.urban_patches ?? "—"}</span>

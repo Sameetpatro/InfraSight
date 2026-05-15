@@ -1,60 +1,135 @@
+<div align="center">
+
 # InfraSight
 
-InfraSight is an end-to-end workspace for **geospatial intelligence from aerial or satellite imagery**. It combines a **React** web app, a **FastAPI** service, and the **PixelMapINT** pipeline: a 7-class **SegFormer** land-cover model with optional specialist heads (building, water, road) and an advisory **YOLO** waste detector. The API returns a colored **marking map** overlay, structured **spatial analytics**, rule-based **governance alerts**, and **change hints** when a second scan matches the same location fingerprint.
+### *Geospatial intelligence — perception, reasoning, and memory.*
+
+<br/>
+
+**Turn aerial and satellite imagery into actionable land intelligence:** segmentation, multi-model fusion, analytics, governance-style alerts, and **longitudinal memory** — in one cohesive stack.
+
+<br/>
+
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-Inference-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Transformers](https://img.shields.io/badge/HF-Transformers-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)](https://huggingface.co/docs/transformers)
+
+<br/>
+
+[Overview](#-overview) ·
+[Why it matters](#-why-it-matters) ·
+[Architecture](#-architecture) ·
+[Features](#-feature-matrix) ·
+[Quick start](#-quick-start) ·
+[Configuration](#-model-weights--environment) ·
+[API](#-api-reference) ·
+[Docs](#-further-reading)
+
+<br/>
+
+</div>
 
 ---
 
-## What you get
+## Overview
 
-- **Semantic land-cover** (urban, agricultural, open/rangeland, forest, water, barren, unknown) with an obstacle-style overlay: clear routing vs vegetation, water, and built-up areas.
-- **Optional fusion**: binary SegFormer specialists override building and water regions; road masks are treated as routable (clear) on the marking map.
-- **Waste advisory**: bounding boxes drawn on the overlay when `best.pt` (YOLO) is present; detections feed into spatial alerts.
-- **Spatial intelligence**: coverage percentages, estimated areas (assuming ~0.5 m GSD per pixel in the analytics layer), patch counts, and governance-style alerts.
-- **Scan memory**: SQLite stores each job; uploads with the same **location hash** enable **class-coverage change** reporting vs the previous scan.
+**InfraSight** is an end-to-end workspace for **geospatial intelligence** from aerial or satellite imagery. It wires together a polished **React** experience, a **FastAPI** inference service, and **PixelMapINT**: a **7-class SegFormer** backbone with optional **binary specialist heads** (building, water, road) plus an advisory **YOLO** waste detector.
+
+The system does not stop at a pretty overlay. It emits a **marking map** (routing-oriented semantics), **structured spatial analytics**, **governance-style alerts**, and **change intelligence** when a new scan shares the same **location fingerprint** as a prior one.
 
 ---
 
-## Repository layout
+## Why it matters
+
+| Stakeholder | What InfraSight surfaces |
+|-------------|-------------------------|
+| **Operators** | One upload → instant overlay + stats; no GIS toolchain required for a first pass. |
+| **Planners** | Land-cover mix, heat-island / green-cover signals, and open-land hints as conversation starters. |
+| **Monitoring** | SQLite-backed **timeline** per location; **delta** views when the same footprint is rescanned. |
+
+> **Judge mode:** If you only read one paragraph — InfraSight is *perception + reasoning + memory*: deep models for pixels, rules and rollups for sense-making, and persistence so the story of a place can evolve across uploads.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph Client["Browser — React 18"]
+    UI[Upload · Canvas · Summary · 3D hero]
+  end
+
+  subgraph API["FastAPI — port 8000"]
+    D["POST /detect"]
+    H["GET /health"]
+    S["GET /summary/:hash"]
+    ST["/results/*.png static"]
+  end
+
+  subgraph ML["ml/ — PixelMapINT integration"]
+    DEC[decode_upload_bytes]
+    SEG[SegFormer 7-class + tiling]
+    SPEC[Optional binary specialists]
+    YO[YOLO waste boxes]
+    FUSE[Fusion → marking overlay]
+    INTEL[Spatial report + alerts + change vs prior]
+  end
+
+  subgraph Store["Persistence"]
+    SQL[(SQLite memory.db)]
+    PNG[(Result PNGs)]
+  end
+
+  UI -->|multipart image| D
+  D --> DEC --> SEG --> SPEC --> FUSE
+  FUSE --> YO
+  FUSE --> INTEL
+  INTEL --> SQL
+  FUSE --> PNG
+  ST --> PNG
+  UI --> H
+  UI --> S
+  S --> SQL
+```
+
+<details>
+<summary><strong>Repository map</strong> (click to expand)</summary>
 
 | Path | Role |
 |------|------|
-| `frontend/` | React 18 UI (upload, canvas, summary, Three.js hero). Proxies API calls to the backend in development. |
-| `backend/` | FastAPI app (`main.py`), SQLite memory, static serving of result PNGs under `/results`. |
-| `ml/` | Inference integration (`integration.py`), image decode (`preprocess.py`), shared `requirements.txt` pulled in by the backend. |
-| `model/PixelMapINT/` | Checkpoints, deployment scripts, notebooks, and sub-README for the PixelMapINT / SegFormer story. |
+| `frontend/` | React 18 UI — upload, marking canvas, summary, Three.js hero; **dev proxy** to the API. |
+| `backend/` | `main.py` — FastAPI, CORS, lifespan hooks, `/results` static mount, job orchestration. |
+| `backend/memory/` | Fingerprinting + SQLite timeline for `location_hash`. |
+| `ml/` | `integration.py` (SegFormer + fusion + YOLO + analytics), `preprocess.py`, shared `requirements.txt`. |
+| `model/PixelMapINT/` | Weights, notebooks, deployment helpers, and deep-dive docs. |
+
+</details>
 
 ---
 
-## Prerequisites
+## Feature matrix
 
-- **Python 3.10+** (recommended for PyTorch + Transformers).
-- **Node.js 18+** and npm for the frontend.
-- **GPU** optional; CUDA is used when available.
-
----
-
-## Model weights and environment variables
-
-Default checkpoint paths live under `model/PixelMapINT/model/`:
-
-| Asset | Default file | Override env var |
-|-------|----------------|------------------|
-| Main 7-class SegFormer | `segformer_spatial_model.pth` | `ML_SEGFORMER_WEIGHTS` |
-| Building specialist (2-class) | `building_segformer.pth` | `ML_BUILDING_SEGFORMER_WEIGHTS` |
-| Road specialist | `road_segformer.pth` | `ML_ROAD_SEGFORMER_WEIGHTS` |
-| Water specialist | `water_segformer.pth` | `ML_WATER_SEGFORMER_WEIGHTS` |
-| Waste (YOLO) | `best.pt` | `ML_WASTE_YOLO_WEIGHTS` |
-
-- **Hugging Face** base weights for `nvidia/segformer-b0-finetuned-ade-512-512` are cached under `.hf_cache/` at the repo root (created on first run).
-- **Tiling**: set `ML_TILE_GRID` (default `2`) for an N×N grid of crops; each tile runs SegFormer and results are stitched for finer detail on large images.
-
-If the main weights file is missing, the API still responds but marks inference as skipped and omits the overlay until weights are installed.
+| Capability | Detail |
+|------------|--------|
+| **Semantic land-cover** | Urban, agricultural, open/rangeland, forest, water, barren, unknown — mapped to a **routing-style marking layer** (clear vs vegetation vs water vs built). |
+| **Multi-model fusion** | Optional **building** / **water** binary SegFormers refine the semantic map; **roads** render as **routable (clear)** on the marking overlay. |
+| **Waste advisory** | When `best.pt` is present, **YOLO** draws red advisory boxes; hits fold into **spatial alerts**. |
+| **Spatial intelligence** | Coverage %, estimated areas (~**0.5 m GSD** assumption in analytics), **connected-component** patch counts, governance-style rules. |
+| **Temporal memory** | Same **`location_hash`** → automatic **class-coverage change** report vs the previous scan. |
 
 ---
 
-## Backend setup and run
+## Quick start
 
-From the repository root:
+### Prerequisites
+
+- **Python 3.10+** (PyTorch + Transformers friendly)
+- **Node.js 18+** + npm
+- **NVIDIA GPU** optional — CUDA is picked up automatically when available
+
+### 1 · Backend (API + ML)
 
 ```bash
 cd backend
@@ -64,7 +139,10 @@ pip install -r requirements.txt
 ./run_dev.sh
 ```
 
-The API listens on **http://127.0.0.1:8000** with auto-reload. Equivalent manual command (if `uvicorn` is not on your PATH):
+API base: **http://127.0.0.1:8000** (hot reload enabled).
+
+<details>
+<summary><strong>Alternative — explicit uvicorn</strong> (if <code>uvicorn</code> is not on PATH)</summary>
 
 ```bash
 .venv/bin/python -m uvicorn main:app --reload --port 8000 --host 127.0.0.1 \
@@ -72,17 +150,9 @@ The API listens on **http://127.0.0.1:8000** with auto-reload. Equivalent manual
   --reload-exclude '*/site-packages/*' --reload-exclude 'data/results/*'
 ```
 
-- **Health**: `GET /health` — includes ML weight discovery and load status.
-- **Detect**: `POST /detect` — multipart field `image` (file upload). Returns JSON plus `result_url` for the marking PNG when inference succeeds.
-- **Summary**: `GET /summary/{location_hash}` — timeline and latest analytics for that location.
+</details>
 
-Result images are written under `backend/data/results/` and exposed at `/results/{job_id}.png`.
-
----
-
-## Frontend setup and run
-
-In a second terminal:
+### 2 · Frontend (UI)
 
 ```bash
 cd frontend
@@ -90,35 +160,77 @@ npm install
 npm start
 ```
 
-The dev server uses the **proxy** in `frontend/package.json` to forward `/detect`, `/summary`, `/health`, and `/results` to `http://127.0.0.1:8000`. Start the backend first, then open the app URL printed by Create React App (typically **http://localhost:3000**).
+Open **http://localhost:3000** — the app **proxies** `/detect`, `/summary`, `/health`, and `/results` to `127.0.0.1:8000`. **Start the backend first.**
 
-Production build:
+### Production build
 
 ```bash
-npm run build
+cd frontend && npm run build
 ```
 
-Serve the `frontend/build/` static files behind a reverse proxy that also routes API requests to the FastAPI app, or configure your deployment URLs accordingly.
+Serve `frontend/build/` behind your reverse proxy and route API traffic to FastAPI, or adjust base URLs for your host.
 
 ---
 
-## Location fingerprinting and change detection
+## Model weights & environment
 
-- Each upload gets a **`location_hash`**. By default this is derived from the image bytes (`loc_<sha256 prefix>`).
-- For demos, filenames containing **`demo`** or **`delhi`** map to a fixed hash (`demo_delhi_001`) so you can simulate repeat visits and see **change_detection** in the UI.
-- The previous scan for the same hash is loaded before inference; land-cover percentage deltas drive the change report and alerts.
+Default checkpoints live under **`model/PixelMapINT/model/`**:
 
-Persistent state uses **`backend/data/memory.db`** (see `.gitignore` — local DB files are typically not committed).
+| Asset | Default file | Override |
+|-------|----------------|----------|
+| Main 7-class SegFormer | `segformer_spatial_model.pth` | `ML_SEGFORMER_WEIGHTS` |
+| Building specialist | `building_segformer.pth` | `ML_BUILDING_SEGFORMER_WEIGHTS` |
+| Road specialist | `road_segformer.pth` | `ML_ROAD_SEGFORMER_WEIGHTS` |
+| Water specialist | `water_segformer.pth` | `ML_WATER_SEGFORMER_WEIGHTS` |
+| Waste (YOLO) | `best.pt` | `ML_WASTE_YOLO_WEIGHTS` |
+
+- **Hugging Face** pulls `nvidia/segformer-b0-finetuned-ade-512-512` into **`.hf_cache/`** at repo root on first inference.
+- **`ML_TILE_GRID`** (default **`2`**) — N×N tiling: each tile runs SegFormer; outputs are **stitched** for sharper large-image detail.
+
+If the **main** weights file is absent, the API still answers but **skips** finetuned inference and omits the overlay until weights are placed.
+
+---
+
+## API reference
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/health` | Liveness + ML weight discovery / load hints. |
+| `POST` | `/detect` | Multipart field **`image`** — returns JSON + `result_url` to marking PNG when inference succeeds. |
+| `GET` | `/summary/{location_hash}` | Timeline + latest analytics for that fingerprint. |
+| `GET` | `/results/{job_id}.png` | Served marking map (files under `backend/data/results/`). |
+
+---
+
+## Location fingerprinting & change detection
+
+| Behavior | Mechanism |
+|----------|-----------|
+| **Default fingerprint** | SHA-256 of raw bytes → `loc_<24-char hex>` |
+| **Demo shortcut** | Filename contains **`demo`** or **`delhi`** → fixed hash **`demo_delhi_001`** so judges can **rescan** and see **`change_detection`** instantly. |
+| **Change signal** | Before inference, latest prior payload for that hash is loaded; **land-cover % deltas** drive the change report and alerts. |
+
+Persistent scans: **`backend/data/memory.db`** (typically gitignored — clone fresh → empty DB).
 
 ---
 
 ## Further reading
 
-- **`model/PixelMapINT/README.md`** — hackathon origin, feature list, and high-level pipeline narrative.
-- **`model/PixelMapINT/model/INSTRUCTIONS.md`** — fusion architecture, specialist roles, and analytics conventions for PixelMapINT.
+| Document | Contents |
+|----------|----------|
+| [`model/PixelMapINT/README.md`](model/PixelMapINT/README.md) | Origin story, feature narrative, pipeline overview. |
+| [`model/PixelMapINT/model/INSTRUCTIONS.md`](model/PixelMapINT/model/INSTRUCTIONS.md) | Fusion order, specialist contracts, analytics conventions. |
 
 ---
 
 ## Disclaimer
 
-Outputs are **research and decision-support aids**, not certified surveying or regulatory compliance. Always verify critical findings in the field and with authoritative GIS data.
+InfraSight outputs are **research and decision-support aids**, not certified surveying, cadastral truth, or regulatory sign-off. Validate anything safety- or legally material with **field verification** and **authoritative GIS**.
+
+---
+
+<div align="center">
+
+**Built for clarity under pressure — pixels in, intelligence out.**
+
+</div>

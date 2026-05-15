@@ -62,3 +62,6 @@ yarn-error.log*
 .vscode/
 *.swp
 *.swo
+
+# Local ML weights & PixelMapINT artifacts (keep on disk, not in git)
+model/
